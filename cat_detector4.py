@@ -10,8 +10,11 @@ from datetime import datetime
 LED_PINS = [18, 23, 24]  # Каждый светодиод подключён к разному GND
 PWM_DUTY_CYCLE = 50  # 50% мощности, чтобы не перегружать GPIO
 
+
+LIGHT_ON_CAT_HERE = 60 # 60 секунд, если кот обнаружен, то свет включается на 60 секунд
+
 # Время работы светодиодов (5 минут = 300 секунд)
-LIGHT_ON_DURATION = 60
+LIGHT_ON_DURATION = 60 #освещение включается на 60 секунд
 light_on_time = 0  # Когда включили свет
 light_on = False  # Флаг состояния света
 
@@ -33,7 +36,7 @@ LABELS_PATH = "/home/pi/coco_labels.txt"
 
 # URL камеры
 CAMERA_URL = "http://ip/IMAGE.JPG?cidx=$(date +%s)"
-WGET_COMMAND = f'wget --user=admin --password="" -q -O {IMAGE_PATH} "{CAMERA_URL}"' #для d-link dcs-910
+WGET_COMMAND = f'wget --user=admin --password="" -q -O {IMAGE_PATH} "{CAMERA_URL}"'
 # Данные для Telegram
 BOT_TOKEN = "token"
 CHAT_ID = "chat_id"
@@ -41,7 +44,7 @@ TELEGRAM_PHOTO_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
 # Время последней отправки
 last_sent_time = 0
-NOTIFICATION_INTERVAL = 10  #каждые 10 сек отправлять кота в телегу, он может просто придти и не поесть
+NOTIFICATION_INTERVAL = 30  #каждые 30 сек отправлять кота в телегу, он может просто придти и не поесть
 
 # Загружаем классы (кот = 17 в COCO)
 with open(LABELS_PATH, "r") as f:
@@ -74,6 +77,11 @@ def turn_off_leds():
         pwm.ChangeDutyCycle(0)  # 0% мощности
     print("💡 Светодиоды ВЫКЛЮЧЕНЫ")
 
+def is_night_time():
+    """Проверяем, ночное ли сейчас время (22:00-06:00)"""
+    current_hour = datetime.now().hour
+    return current_hour >= 22 or current_hour < 6
+
 # Основной цикл проверки изображений
 while True:
     os.system(WGET_COMMAND)
@@ -92,17 +100,7 @@ while True:
     # Проверяем освещенность
     brightness = check_brightness(frame)
 
-    if brightness < 30 and not light_on:
-        turn_on_leds()
-        light_on = True
-        light_on_time = current_time  # Запоминаем время включения
-
-    if light_on and (current_time - light_on_time > LIGHT_ON_DURATION):
-        turn_off_leds()
-        light_on = False  # Обнуляем флаг
-
-
-    # Подготавливаем изображение для модели
+    # Запускаем нейросеть
     input_shape = input_details[0]['shape']
     img_resized = cv2.resize(frame, (input_shape[1], input_shape[2]))
     input_data = np.expand_dims(img_resized, axis=0).astype(np.uint8)
@@ -121,12 +119,42 @@ while True:
 
     current_time = time.time()
 
+    # Проверяем освещенность и наличие кота
+    brightness = check_brightness(frame)
+    
+    # Новая логика включения света
+    if found_cat and is_night_time() and not light_on:
+        # Если кот обнаружен ночью - включаем свет сразу
+        turn_on_leds()
+        light_on = True
+        light_on_time = current_time
+        print("🌙 Кот обнаружен ночью - включаем подсветку")
+    elif brightness < 30 and not light_on:
+        # Стандартная логика включения по освещенности
+        turn_on_leds()
+        light_on = True
+        light_on_time = current_time
+        print(f"🌑 Низкая освещенность ({brightness:.1f}) - включаем подсветку")
+
+    # Проверяем, нужно ли выключить свет
+    if light_on:
+        if found_cat and is_night_time():
+            # Если кот есть и сейчас ночь - используем LIGHT_ON_CAT_HERE
+            if current_time - light_on_time > LIGHT_ON_CAT_HERE:
+                turn_off_leds()
+                light_on = False
+        else:
+            # В остальных случаях используем стандартный LIGHT_ON_DURATION
+            if current_time - light_on_time > LIGHT_ON_DURATION:
+                turn_off_leds()
+                light_on = False
+
     if found_cat and (current_time - last_sent_time > NOTIFICATION_INTERVAL):
         print("🐱 КОТ ОБНАРУЖЕН!")
 
         # Сохраняем фото
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        cat_photo_path = os.path.join(SAVE_PATH, f"cat_{timestamp}.jpg")
+        cat_photo_path = os.path.join(SAVE_PATH, f"shkoda_{timestamp}.jpg")
         cv2.imwrite(cat_photo_path, frame)
         print(f"📸 Фото сохранено: {cat_photo_path}")
 
@@ -135,7 +163,5 @@ while True:
         os.system(send_photo_cmd)
         last_sent_time = current_time  # Обновляем время последней отправки
         print("📨 Фото и сообщение отправлены в Telegram!")
-    else:
-        print("❌ Кота нет или уведомление было отправлено недавно.")
 
     time.sleep(1)  # Проверяем раз в секунду
