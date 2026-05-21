@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Models & data (download separately, don't commit)
+*.tflite
+*.pt
+*.onnx
+*.zip
+coco_labels.txt
+labelmap.txt
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Output
+cam/
+*.jpg
+*.png
+!docs/*.png
